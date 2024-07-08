@@ -5,7 +5,7 @@
 * Edt/Rev  YYYY/MM/DD  Modified by
 * Comment
 * ------------------------------------------------------------------
-*  1       2024/06/16  John Federico
+*
 * Started.
 
                nam       colors8
