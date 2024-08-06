@@ -2,5 +2,18 @@
 os9 copy -r ~/projects/livingworlds/fnx-os9/livingworlds ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/livingworlds
 os9 attr ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/livingworlds -epe
 os9 copy -r ~/projects/livingworlds/fnx-os9/pixmap8raw ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/pixmap8raw
+os9 copy -r ~/projects/livingworlds/fnx-os9/pixmap13raw ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/pixmap13raw
+os9 copy -r ~/projects/livingworlds/fnx-os9/pixmap16raw ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/pixmap16raw
+os9 copy -r ~/projects/livingworlds/fnx-os9/pixmap17raw ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/pixmap17raw
+os9 copy -r ~/projects/livingworlds/fnx-os9/pixmap18raw ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/pixmap18raw
 os9 copy -r ~/projects/livingworlds/fnx-os9/colors8 ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/colors8
+os9 copy -r ~/projects/livingworlds/fnx-os9/colors13 ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/colors13
+os9 copy -r ~/projects/livingworlds/fnx-os9/colors16 ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/colors16
+os9 copy -r ~/projects/livingworlds/fnx-os9/colors17 ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/colors17
+os9 copy -r ~/projects/livingworlds/fnx-os9/colors18 ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/colors18
 os9 attr ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/colors8 -epe
+os9 attr ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/colors13 -epe
+os9 attr ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/colors16 -epe
+os9 attr ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/colors17 -epe
+os9 attr ~/projects/nitros9/level2/f256/NOS9_6809_L2_v030300_f256jr_sd.dsk,CMDS/colors18 -epe
+

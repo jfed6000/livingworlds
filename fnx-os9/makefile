@@ -18,7 +18,7 @@ DEPENDS		= ./makefile
 #SOURCEFILES = inout.bf helloworld.bf donothing.bf
 SOURCEFILES = $(shell echo *.bf)
 TEXTFILES	= ReadMe $(SOURCEFILES)
-OBJS		= livingworlds pixmap8raw colors8
+OBJS		= livingworlds keytest pixmap8raw colors8 colors13 pixmap13raw colors16 pixmap16raw colors17 pixmap17raw colors18 pixmap18raw
 ALLOBJS		= $(OBJS)
 
 all:	banner $(ALLOBJS) $(DEPENDS)
@@ -33,10 +33,37 @@ banner:
 livingworlds: livingworlds.asm
 	$(AS) $(ASOUT)$@ $< $(AFLAGS)
 
+keytest: keytest.asm
+	$(AS) $(ASOUT)$@ $< $(AFLAGS)
+
 colors8: colors8.asm
 	$(AS) $(ASOUT)$@ $< $(AFLAGS)
 
 pixmap8raw: pixmap8-raw.asm
+	$(AS) $(ASOUT)$@ $< $(AFLAGS)
+
+colors13: colors13.asm
+	$(AS) $(ASOUT)$@ $< $(AFLAGS)
+
+pixmap13raw: pixmap13-raw.asm
+	$(AS) $(ASOUT)$@ $< $(AFLAGS)
+
+colors16: colors16.asm
+	$(AS) $(ASOUT)$@ $< $(AFLAGS)
+
+pixmap16raw: pixmap16-raw.asm
+	$(AS) $(ASOUT)$@ $< $(AFLAGS)
+
+colors17: colors17.asm
+	$(AS) $(ASOUT)$@ $< $(AFLAGS)
+
+pixmap17raw: pixmap17-raw.asm
+	$(AS) $(ASOUT)$@ $< $(AFLAGS)
+
+colors18: colors18.asm
+	$(AS) $(ASOUT)$@ $< $(AFLAGS)
+
+pixmap18raw: pixmap18-raw.asm
 	$(AS) $(ASOUT)$@ $< $(AFLAGS)
 
 clean: 

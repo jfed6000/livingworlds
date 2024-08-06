@@ -277,7 +277,6 @@ start
 	       fcb $ff,$ff,$ff,$00
 	       fcb $ff,$ff,$ff,$00
 
-
                emod
 eom            equ       *
                end
