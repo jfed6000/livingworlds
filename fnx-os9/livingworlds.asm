@@ -21,6 +21,19 @@
                     use       defsfile
                     endc
 
+* TinyVicky II DMA Registers (Junior 2 architecture)
+DMA_BASE_ADDR       equ       $FEC0
+DMA_CTRL            equ       DMA_BASE_ADDR+0     * Control register (b0=En, b2=Fill, b7=Start)
+DMA_STATUS          equ       DMA_BASE_ADDR+1     * Read: b7=Busy (TRF_IP)
+DMA_FILL_VAL        equ       DMA_BASE_ADDR+1     * Write: 8-bit fill byte
+DMA_DST_H           equ       DMA_BASE_ADDR+9     * Destination address bits 23:16 ($FEC9)
+DMA_DST_M           equ       DMA_BASE_ADDR+10    * Destination address bits 15:8  ($FECA)
+DMA_DST_L           equ       DMA_BASE_ADDR+11    * Destination address bits 7:0   ($FECB)
+DMA_SZ_1D_H         equ       DMA_BASE_ADDR+15    * 1D size bits 23:16 ($FECF)
+DMA_SZ_1D_M         equ       DMA_BASE_ADDR+12    * 1D size bits 15:8  ($FECC)
+DMA_SZ_1D_L         equ       DMA_BASE_ADDR+13    * 1D size bits 7:0   ($FECD)
+FADE_DELAY          equ       4         Ticks per fade step (4 ticks @ 60Hz = 15 Hz step rate, ~0.53s total fade)
+
 tylg                set       Prgrm+Objct
 atrv                set       ReEnt+rev
 rev                 set       $00
@@ -33,9 +46,9 @@ bmblock             rmb       1         bitmap block#
 mapaddr             rmb       2         Address for mapped block
 currBlk             rmb       2         current mapped in block, (need to read into X)
 blkCnt              rmb       1         Counter for block loop
-fade_in_index       rmb       1
-fade_out_index      rmb       1
-fade_key            rmb       1
+fade_state          rmb       1         0 = normal, 1 = fade out, 2 = fade in
+fade_tick           rmb       1         tick counter for fade delay
+fade_key            rmb       1         fade brightness level (0 = 100%, 8 = black)
 scene_index         rmb       1
 next_scene_index    rmb       1
 animation_index     rmb       1
@@ -45,6 +58,11 @@ iter_1              rmb       1
 tmpb                rmb       1
 tmpg                rmb       1
 tmpr                rmb       1
+anim_speed          rmb       1
+tick_count          rmb       1
+paused              rmb       1
+saved_eko           rmb       1
+popts               rmb       32
 tmpclut             rmb       1024      
                     rmb       250       stack space
 size                equ       .
@@ -54,15 +72,26 @@ name                fcs       /livingworlds/
 
 
 start
+*                   **** Setup signal intercept
+                    leax      sig_handler,pcr
+                    os9       F$Icpt
+
+*                   **** Turn off keyboard echo so typing doesn't write to text screen
+                    lbsr      keyechooff
+
 *                   **** Initialize vars
                     ldx       #0
                     stx       <clutheader
                     stx       <clutdata
-                    clr       <fade_in_index
-                    clr       <fade_out_index
+                    clr       <fade_state
+                    clr       <fade_tick
                     clr       <fade_key
                     clr       <scene_index
                     clr       <animation_index
+                    clr       <tick_count
+                    clr       <paused
+                    lda       #5                  Default animation delay: 5 ticks (12 fps, locked to 60Hz VSYNC)
+                    sta       <anim_speed
                     
 *                   **** Get a new bitmap 0
                     ldy       #$0                 Bitmap #
@@ -94,79 +123,112 @@ setlayer
 
 main                lbsr      initializescene     load the pixmap and clut
 
-* In the 6502 code the lock routine checks animation_index, when it
-* wraps around to 0, It breaks out of the lock.  animation_index is
-* decrement by an IRQ interrupt on the video signal for start of frame
-* instead of this, just sleep the process and free the time for other
-* processes in the system
-lock                ldx       #7               
-                    os9       F$Sleep
+*                   **** Clear hardware CLUT #0 to black for initial fade-in
+                    lda       #8
+                    sta       <fade_key
+                    lbsr      fadeclut
 
-*                   **** Reset for next frame
-UpdateCheck         lda       #$5
-                    sta       <animation_index
-
-*                   **** Update fade
-                    lda       <fade_in_index        6502 code has a cmp #0, but lda set zero flag
-                    bne       ApplyFadeIn
-
-                    lda       <fade_out_index
-                    bne       ApplyFadeOut
-
-*                   **** No fade
-                    lbsr      updatelut
-                    lbsr      clutcopy
-                    bra       pollkeyboard
-
-ApplyFadeIn         cmpa      #5
-                    bne       fadeit
-*                    **** Turn on Graphics
+*                   **** Turn on Graphics
                     ldx       #FX_BM+FX_GRF       Turn on Bitmaps and Graphics
                     ldy       #FT_OMIT            Don't change $FFC1
                     lda       #$00                Path #
                     ldb       #SS.DScrn           Display Screen with new settings 
                     os9       I$SetStt            
                     lbcs      error                 
-fadeit              dec       <fade_in_index
-                    dec       <fade_key
-                    bne       fadein
-                    lbsr      clutcopy
-                    bra       lock
-fadein              lbsr      fadeclut
-                    bra       lock
 
-ApplyFadeOut        inc       <fade_out_index
-                    inc       <fade_key
-                    bne       fadeout
+*                   **** Start with smooth fade-in from black
+                    lda       #2                  STATE_FADE_IN
+                    sta       <fade_state
+                    lda       #8                  Start at black
+                    sta       <fade_key
+                    clr       <fade_tick
+
+animloop            ldx       #2                  Real 1-tick timed sleep (16.6ms / 60Hz VSYNC)
+                    os9       F$Sleep
+
+                    lbsr      handlekeyboard
+                    tsta
+                    bne       checkexit
+
+continue_anim       tst       <fade_state
+                    bne       process_fade
+
+*                   **** Normal animation state (fade_state == 0)
+                    tst       <paused
+                    bne       animloop
+
+                    inc       <tick_count
+                    lda       <tick_count
+                    cmpa      <anim_speed
+                    blo       animloop
+                    clr       <tick_count
+
+                    lbsr      updatelut
                     lbsr      clutcopy
-                    bra       contfadeout@
-fadeout             lbsr      fadeclut
-contfadeout@        lda       <fade_key
-                    cmpa      #7
-                    bne       lock
-*                   ****      Advance to next scene
-*                   **** Turn off bitmap
-                    ldx       #FX_GRF            Turn on Bitmaps and Graphics
-                    ldy       #FT_OMIT            Don't change $FFC1
-                    lda       #$00                Path #
-                    ldb       #SS.DScrn           Display Screen with new settings 
-                    os9       I$SetStt            
-                    lbcs      error
-                    
-                    clr       <fade_out_index
+                    bra       animloop
+
+*                   **** Fade state processing (fade_state != 0)
+process_fade        inc       <fade_tick
+                    lda       <fade_tick
+                    cmpa      #FADE_DELAY         Advance fade every FADE_DELAY ticks (~0.53s total fade)
+                    blo       animloop
+                    clr       <fade_tick
+
+                    lda       <fade_state
+                    cmpa      #1                  State 1 = Fading OUT
+                    beq       do_fade_out
+                    cmpa      #2                  State 2 = Fading IN
+                    beq       do_fade_in
+                    clr       <fade_state
+                    bra       animloop
+
+do_fade_out         inc       <fade_key
+                    lda       <fade_key
+                    cmpa      #8
+                    bhi       fade_out_done
+                    lbsr      updatelut           Animate colors while fading
+                    lbsr      fadeclut            Upload dimmed palette
+                    bra       animloop
+
+fade_out_done       * Fade out complete (screen is black)
+                    * Switch to next scene
+                    lbsr      unlinkclut
                     lda       <next_scene_index
                     sta       <scene_index
-                    lbsr      unlinkclut
                     lbsr      initializescene
-                    lbra      lock
-                    
-pollkeyboard        lbsr      handlekeyboard
-                    cmpa      #113
-                    beq       exit
 
-                    lbra      lock
+                    * Begin fade-in
+                    lda       #2                  STATE_FADE_IN
+                    sta       <fade_state
+                    lda       #8                  Start at black
+                    sta       <fade_key
+                    clr       <fade_tick
+                    bra       animloop
 
-*                   lbsr      Wait4KeyPress
+do_fade_in          dec       <fade_key
+                    beq       fade_in_done
+                    lbsr      updatelut           Animate colors while fading in
+                    lbsr      fadeclut            Upload brightening palette
+                    bra       animloop
+
+fade_in_done        lbsr      clutcopy            Restore 100% bright original palette
+                    clr       <fade_state         Back to normal running
+                    clr       <tick_count
+                    bra       animloop
+
+checkexit           cmpa      #'q'
+                    lbeq      exit
+                    cmpa      #'Q'
+                    lbeq      exit
+                    cmpa      #5                  Ctrl-E / ESC from PS/2
+                    lbeq      exit
+                    cmpa      #27                 ASCII ESC
+                    lbeq      exit
+                    cmpa      #3                  Ctrl-C
+                    lbeq      exit
+                    lbra      continue_anim
+
+sig_handler         lbra      exit
 
 *                   **** Turn off Graphics
 exit                ldx       #FX_TXT             Turn on Text, all else off
@@ -174,7 +236,9 @@ exit                ldx       #FX_TXT             Turn on Text, all else off
                     lda       #$00                Path #
                     ldb       #SS.DScrn           Display Screen with new settings 
                     os9       I$SetStt            
-                    lbcs      error
+
+*                   **** Restore terminal echo
+                    lbsr      keyechoon
 
 *                   **** Unlink CLUT
                     lbsr      unlinkclut
@@ -184,10 +248,37 @@ exit                ldx       #FX_TXT             Turn on Text, all else off
                     lda       #$0                 Path #
                     ldb       #SS.FScrn           Free Screen Ram
                     os9       I$SetStt
-                    lbcs       error
-                    clrb
 
+                    clrb
 error               os9       F$Exit
+
+keyechooff          pshs      a,b,x
+                    clra
+                    ldb       #SS.Opt
+                    leax      popts,u
+                    os9       I$GetStt
+                    bcs       keo_exit@
+                    lda       4,x
+                    sta       saved_eko,u
+                    clr       4,x
+                    clra
+                    ldb       #SS.Opt
+                    os9       I$SetStt
+keo_exit@           puls      a,b,x,pc
+
+keyechoon           pshs      a,b,x
+                    clra
+                    ldb       #SS.Opt
+                    leax      popts,u
+                    os9       I$GetStt
+                    bcs       ken_exit@
+                    lda       saved_eko,u
+                    sta       4,x
+                    clra
+                    ldb       #SS.Opt
+                    os9       I$SetStt
+ken_exit@           puls      a,b,x,pc
+
 
 clut0               fcs       /colors13/
 clut1               fcs       /colors8/
@@ -209,40 +300,115 @@ CRtn                fcb       C$CR
 
 
 handlekeyboard      lbsr      INKEY
-                    cmpa      #8
-                    beq       leftarrow
-                    cmpa      #9
-                    beq       rightarrow
+                    tsta
+                    lbeq      hk_done
+
+* Next scene keys
+                    cmpa      #9                  Tab / Right arrow
+                    lbeq      rightarrow
+                    cmpa      #$0E                Alt right arrow
+                    lbeq      rightarrow
+                    cmpa      #']'
+                    lbeq      rightarrow
+                    cmpa      #'d'
+                    lbeq      rightarrow
+                    cmpa      #'D'
+                    lbeq      rightarrow
+                    cmpa      #' '                Spacebar
+                    lbeq      rightarrow
+
+* Previous scene keys
+                    cmpa      #8                  Backspace / Left arrow
+                    lbeq      leftarrow
+                    cmpa      #'['
+                    lbeq      leftarrow
+                    cmpa      #'a'
+                    lbeq      leftarrow
+                    cmpa      #'A'
+                    lbeq      leftarrow
+
+* Speed adjustment keys
+                    cmpa      #'+'
+                    beq       speed_up
+                    cmpa      #'='
+                    beq       speed_up
+                    cmpa      #'-'
+                    beq       speed_down
+                    cmpa      #'_'
+                    beq       speed_down
+
+* Pause keys
+                    cmpa      #'p'
+                    beq       toggle_pause
+                    cmpa      #'P'
+                    beq       toggle_pause
+
+* Number keys '1'..'9' for direct speed (1 = fastest, 9 = slow)
+                    cmpa      #'1'
+                    blo       hk_unhandled
+                    cmpa      #'9'
+                    bhi       hk_unhandled
+                    suba      #'0'
+                    sta       <anim_speed
+                    clra
                     rts
 
-leftarrow           lda       <scene_index
-                    sta       <next_scene_index
-                    beq       leftarrow_wraparound
-                    dec       <next_scene_index
-                    bra       leftarrow_initializescene
-leftarrow_wraparound                
-                    lda       #4
-                    sta       <next_scene_index
-leftarrow_initializescene
-                    lda       #1
-                    sta       <fade_out_index
-                    sta       <fade_key
+speed_up            lda       <anim_speed
+                    cmpa      #1
+                    bls       su_done@
+                    deca
+                    sta       <anim_speed
+su_done@            clra
                     rts
 
+speed_down          lda       <anim_speed
+                    cmpa      #30
+                    bhs       sd_done@
+                    inca
+                    sta       <anim_speed
+sd_done@            clra
+                    rts
 
-rightarrow          lda       <scene_index
-                    sta       <next_scene_index
+toggle_pause        lda       <paused
+                    eora      #1
+                    sta       <paused
+                    clra
+                    rts
+
+hk_done             clra
+hk_unhandled        rts
+
+leftarrow           tst       <fade_state
+                    bne       hk_done             Ignore if already fading
+                    lda       <scene_index
+                    beq       la_wrap@
+                    deca
+                    bra       la_switch@
+la_wrap@            lda       #4
+la_switch@          sta       <next_scene_index
+                    lda       #1                  STATE_FADE_OUT
+                    sta       <fade_state
+                    clr       <fade_key
+                    clr       <fade_tick
+                    clra
+                    rts
+
+rightarrow          tst       <fade_state
+                    bne       hk_done             Ignore if already fading
+                    lda       <scene_index
                     cmpa      #4
-                    beq       rightarrow_wraparound
-                    inc       <next_scene_index
-                    bra       rightarrow_initializescene
-rightarrow_wraparound
-                    clr       <next_scene_index
-rightarrow_initializescene
-                    lda       #1
-                    sta       <fade_out_index
-                    sta       <fade_key
+                    beq       ra_wrap@
+                    inca
+                    bra       ra_switch@
+ra_wrap@            clra
+ra_switch@          sta       <next_scene_index
+                    lda       #1                  STATE_FADE_OUT
+                    sta       <fade_state
+                    clr       <fade_key
+                    clr       <fade_tick
+                    clra
                     rts
+
 
 
 forkfstatus         leax      >fstatus,pcr
@@ -267,58 +433,92 @@ getit               lbsr      FGETC               go get the key
 exit@               rts
 
 FGETC               pshs      a,x,y
-                    ldy       #1                  number of char to print
+                    ldy       #1                  number of char to read
                     tfr       s,x                 point x at 1 char buffer
+                    clra                          path 0 (stdin)
                     os9       I$Read
                     puls      a,x,y,pc
                     
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Clut Load
-; extry:  x is address of file path/name
+; entry:  x is address of file path/name
 ; Loads CLUT from file or link
-clutload
-*                   **** Try to link CLUT data module
-*                   **** If Link fails, then Load the module from default chx
-                    pshs      a,b,x,y,u
-                    lda       #0                  F$Load a=langauge, 0=any
+clutload            pshs      a,b,x,y,u
+                    lda       #0                  any module type
                     os9       F$Link              Try linking module
-                    beq       cont@               Load CLUT if no error, if error, try load
-                    os9       F$Load              Load and set Y=entry point of module
-                    lbcs      err@
-cont@               stu       <clutheader
+                    bcc       linkok@             If linked ok, proceed
+                    ldx       2,s                 Restore module name pointer from stack
+                    lda       #0                  any type
+                    os9       F$Load              Load from execution dir
+                    bcs       load_err@           If error, exit
+linkok@             stu       <clutheader
                     sty       <clutdata
-err@                puls      u,y,x,b,a
-
+load_err@           puls      a,b,x,y,u,pc
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Clut copy
-; extry:  none
+; entry:  none
 ; copies clut from loaded module to CLUT#0
-clutcopy            pshs      a,b,y,u
-                    ldx       #0
+clutcopy            pshs      a,b,x,y,u
+                    ldx       #0                  CLUT #0
                     ldy       <clutdata
+                    beq       cc_err@             skip if no clut
                     lda       #$0                 Path #
                     ldb       #SS.DfPal           Define Palette CLUT#0 with data Y
                     os9       I$SetStt
-err@                puls      u,y,a,b,pc
-
+cc_err@             puls      a,b,x,y,u,pc
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Unlink Clut
-; extry:  none
+; entry:  none
 ; unlink the current clut module from memory
 unlinkclut          pshs      u
                     ldu       <clutheader
+                    beq       nounlink@
                     os9       F$Unlink
-                    puls      u,pc
+                    ldu       #0
+                    stu       <clutheader
+                    stu       <clutdata
+nounlink@           puls      u,pc
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; DmaClearScreen
+; 1D Linear DMA Fill: Clear 76,800 bytes ($012C00) of BM0 to color 0
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+DmaClearScreen      pshs      a,b
+                    ldb       <bmblock
+                    tfr       b,a
+                    lsra
+                    lsra
+                    lsra
+                    sta       >DMA_DST_H
+                    tfr       b,a
+                    asla
+                    asla
+                    asla
+                    asla
+                    asla
+                    sta       >DMA_DST_M
+                    clr       >DMA_DST_L
+
+                    lda       #$01                76,800 bytes = $012C00
+                    sta       >DMA_SZ_1D_H
+                    lda       #$2C
+                    sta       >DMA_SZ_1D_M
+                    clr       >DMA_SZ_1D_L
+
+                    clr       >DMA_FILL_VAL       Clear to black ($00)
+                    lda       #$85                DMA_CTRL_Enable + DMA_CTRL_Start_Trf + DMA_CTRL_Fill
+                    sta       >DMA_CTRL
+dma_wait@           lda       >DMA_STATUS
+                    bmi       dma_wait@           b7 = Busy
+                    puls      a,b,pc
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; C to tmp with fade
-; copy the c
-; this is LutLoop in 6502 code.  Using a tmp buffer
-; to avoid addressing hardware directly.
-fadeclut            pshs      a,b,x,y
+fadeclut            pshs      a,b,x,y,u
                     ldx       <clutdata
+                    beq       lutexit@
                     leay      tmpclut,u
                     ldb       #0
                     tst       <fade_key
@@ -349,8 +549,6 @@ nofadeclut          lda       ,x
                     sta       3,y
                     leax      4,x
                     leay      4,y
-                    leax      4,x
-                    leay      4,y
                     incb
                     bne       nofadeclut
 lutdone             leay      tmpclut,u
@@ -358,7 +556,8 @@ lutdone             leay      tmpclut,u
                     lda       #$0                 Path #
                     ldb       #SS.DfPal           Define Palette CLUT#0 with data Y
                     os9       I$SetStt
-                    puls      y,x,b,a,pc                    
+lutexit@            puls      a,b,x,y,u,pc
+                    
                     
                           
                     
@@ -418,90 +617,68 @@ loaderror           puls      a,u,pc
 
 
 ;;; Initialize scene routines
-initializescene     lda       #6
-                    sta       fade_in_index
-                    sta       fade_key
-
-                    lda       scene_index
+initializescene     pshs      a,x
+                    lbsr      DmaClearScreen
+                    lda       <scene_index
                     cmpa      #$0
                     lbeq      LInitScene0
-
                     cmpa      #$1
                     lbeq      LInitScene1
-
                     cmpa      #$2
                     lbeq      LInitScene2
-
                     cmpa      #$3
                     lbeq      LInitScene3
-
                     cmpa      #$4
                     lbeq      LInitScene4
-
-                    rts
+initdone            puls      a,x,pc
 
 LInitScene0         leax      clut0,pcr
                     lbsr      clutload
-                    lbsr      clutcopy
                     leax      pixmap0,pcr
                     lbsr      pixmapload
-                    rts
+                    lbra      initdone
 
 LInitScene1         leax      clut1,pcr
                     lbsr      clutload
-                    lbsr      clutcopy
                     leax      pixmap1,pcr
                     lbsr      pixmapload
-                    rts
+                    lbra      initdone
 
 LInitScene2         leax      clut2,pcr
                     lbsr      clutload
-                    lbsr      clutcopy
                     leax      pixmap2,pcr
                     lbsr      pixmapload
-                    rts
+                    lbra      initdone
 
 LInitScene3         leax      clut3,pcr
                     lbsr      clutload
-                    lbsr      clutcopy
                     leax      pixmap3,pcr
                     lbsr      pixmapload
-                    rts
+                    lbra      initdone
 
 LInitScene4         leax      clut4,pcr
                     lbsr      clutload
-                    lbsr      clutcopy
                     leax      pixmap4,pcr
                     lbsr      pixmapload
-                    rts
+                    lbra      initdone
+
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Fade
 ; Input in A
 ; Output in A
-fade
-                    pshs      b
+fade                pshs      b
                     ldb       <fade_key
-                    cmpb      #0
-                    beq       fade0
-                    cmpb      #1
-                    beq       fade1
-                    cmpb      #2
-                    beq       fade2
-                    cmpb      #3
-                    beq       fade3
-                    cmpb      #4
-                    beq       fade4
-                    cmpb      #5
-                    beq       fade5
-
-fade6               lsra
-fade5               lsra
-fade4               lsra
-fade3               lsra
-fade2               lsra
-fade1               lsra
-fade0               puls      b,pc
+                    beq       fade_done@
+                    cmpb      #8
+                    bhs       fade_black@
+fade_loop@          lsra
+                    decb
+                    bne       fade_loop@
+                    puls      b,pc
+fade_black@         clra
+fade_done@          puls      b,pc
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -549,7 +726,9 @@ cyclecolors_loop    lda       ,x
 ; Update LUT
 ; 
 ;      
-updatelut           lda       <scene_index
+updatelut           ldx       <clutdata
+                    beq       upd_done@
+                    lda       <scene_index
                     cmpa      #0
                     lbeq      updatelutscene0
                     cmpa      #1
@@ -560,7 +739,8 @@ updatelut           lda       <scene_index
                     lbeq      updatelutscene3
                     cmpa      #4
                     lbeq      updatelutscene4
-                    rts
+upd_done@           rts
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Update LUT Scene 0
