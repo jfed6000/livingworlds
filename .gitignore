@@ -9,3 +9,13 @@ x64/
 /fnx/.vs
 *.lbl
 *.php
+*.list
+*.map
+/fnx-os9/colors8
+/fnx-os9/colors13
+/fnx-os9/colors16
+/fnx-os9/colors17
+/fnx-os9/colors18
+/fnx-os9/keytest
+/fnx-os9/livingworlds
+/fnx-os9/pixmap*raw
