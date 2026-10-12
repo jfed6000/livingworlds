@@ -67,7 +67,7 @@ pixmap18raw: pixmap18-raw.asm
 	$(AS) $(ASOUT)$@ $< $(AFLAGS)
 
 clean: 
-	$(RM) $(ALLOBJS)
+	$(RM) $(ALLOBJS) *.list *.map
 
 #dsk: $(DSK)
 
